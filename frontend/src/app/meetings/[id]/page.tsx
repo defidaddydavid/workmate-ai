@@ -1,15 +1,39 @@
+'use client';
+
 import { Suspense } from 'react';
 import Header from '@/components/layout/Header';
-import MeetingTranscriber from '@/components/sections/MeetingTranscriber';
+import { MeetingTranscriber } from '@/components/sections/MeetingTranscriber';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { useParams } from 'next/navigation';
+import { useState } from 'react';
+
+interface TranscriptionData {
+  id: string;
+  status: 'processing' | 'completed' | 'error';
+  text?: string;
+  error?: string;
+  analysis?: {
+    summary: string;
+    key_points: string[];
+    action_items: string[];
+  };
+}
 
 export const metadata = {
   title: 'Meeting Details - WorkMate AI',
   description: 'View and manage your meeting details, transcriptions, and action items.',
 };
 
-export default function MeetingPage({ params }: { params: { id: string } }) {
+export default function MeetingPage() {
+  const params = useParams();
+  const meetingId = params.id as string;
+  const [transcriptionData, setTranscriptionData] = useState<TranscriptionData | null>(null);
+
+  const handleTranscriptionComplete = (data: TranscriptionData) => {
+    setTranscriptionData(data);
+  };
+
   return (
     <div className="flex min-h-screen flex-col">
       <Header />
@@ -70,7 +94,57 @@ export default function MeetingPage({ params }: { params: { id: string } }) {
             {/* Transcription Section */}
             <div className="lg:col-span-2">
               <Suspense fallback={<div>Loading transcription...</div>}>
-                <MeetingTranscriber meetingId={params.id} />
+                <div className="container mx-auto px-4 py-8">
+                  <h1 className="text-2xl font-bold mb-6">Meeting Transcription</h1>
+                  
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div>
+                      <MeetingTranscriber 
+                        meetingId={meetingId}
+                        tier="enterprise"
+                        onTranscriptionComplete={handleTranscriptionComplete}
+                      />
+                    </div>
+
+                    {transcriptionData && transcriptionData.status === 'completed' && (
+                      <div className="space-y-6">
+                        {transcriptionData.text && (
+                          <div className="bg-white p-6 rounded-lg shadow-sm">
+                            <h2 className="text-xl font-semibold mb-4">Transcript</h2>
+                            <p className="whitespace-pre-wrap text-gray-700">{transcriptionData.text}</p>
+                          </div>
+                        )}
+
+                        {transcriptionData.analysis && (
+                          <>
+                            <div className="bg-white p-6 rounded-lg shadow-sm">
+                              <h2 className="text-xl font-semibold mb-4">Summary</h2>
+                              <p className="text-gray-700">{transcriptionData.analysis.summary}</p>
+                            </div>
+
+                            <div className="bg-white p-6 rounded-lg shadow-sm">
+                              <h2 className="text-xl font-semibold mb-4">Key Points</h2>
+                              <ul className="list-disc list-inside space-y-2">
+                                {transcriptionData.analysis.key_points.map((point, index) => (
+                                  <li key={index} className="text-gray-700">{point}</li>
+                                ))}
+                              </ul>
+                            </div>
+
+                            <div className="bg-white p-6 rounded-lg shadow-sm">
+                              <h2 className="text-xl font-semibold mb-4">Action Items</h2>
+                              <ul className="list-disc list-inside space-y-2">
+                                {transcriptionData.analysis.action_items.map((item, index) => (
+                                  <li key={index} className="text-gray-700">{item}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </Suspense>
             </div>
           </div>

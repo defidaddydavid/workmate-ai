@@ -1,17 +1,28 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
+import { headers } from 'next/headers';
+import { RequestCookies } from 'next/dist/server/web/spec-extension/cookies';
+import { Headers } from 'next/dist/compiled/@edge-runtime/primitives';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+function getAuthToken(cookieStore: RequestCookies, headersList: Headers): string | undefined {
+  const authHeader = headersList.get('Authorization');
+  const tokenFromHeader = authHeader?.split(' ')[1];
+  const tokenFromCookie = cookieStore.get('token')?.value;
+  return tokenFromHeader || tokenFromCookie;
+}
+
 async function fetchFromBackend(endpoint: string, options: RequestInit = {}) {
-  const cookieStore = cookies();
-  const token = cookieStore.get('token')?.value;
+  const cookieStore = cookies() as unknown as RequestCookies;
+  const headersList = headers() as unknown as Headers;
+  const token = getAuthToken(cookieStore, headersList);
 
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
     headers: {
       ...options.headers,
-      'Authorization': `Bearer ${token}`,
+      'Authorization': token ? `Bearer ${token}` : '',
     },
   });
 
@@ -109,8 +120,13 @@ export async function GET_UPGRADE(req: Request) {
     return new Response('Invalid request', { status: 400 });
   }
 
-  const cookieStore = cookies();
-  const token = cookieStore.get('token')?.value;
+  const cookieStore = cookies() as unknown as RequestCookies;
+  const headersList = headers() as unknown as Headers;
+  const token = getAuthToken(cookieStore, headersList);
+
+  if (!token) {
+    return new Response('Unauthorized', { status: 401 });
+  }
 
   const upgradeHeader = req.headers.get('Upgrade');
   if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
@@ -119,16 +135,7 @@ export async function GET_UPGRADE(req: Request) {
 
   try {
     const wsUrl = `${API_BASE_URL.replace('http', 'ws')}/api/v1/transcription/live/${meetingId}?tier=enterprise`;
-    const ws = new WebSocket(wsUrl);
-
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ token }));
-    };
-
-    return new Response(null, {
-      status: 101,
-      webSocket: ws,
-    });
+    return NextResponse.json({ url: wsUrl, token });
   } catch (error) {
     console.error('WebSocket connection failed:', error);
     return new Response('WebSocket connection failed', { status: 500 });
