@@ -54,8 +54,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
 parts/
 sdist/
 var/
@@ -87,3 +85,6 @@ uploads/
 *.log
 coverage/
 .coverage
+
+# Allow lib directory
+!frontend/src/lib/
