@@ -7,26 +7,26 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
+import { Metadata } from 'next';
 
 interface TranscriptionData {
-  id: string;
-  status: 'processing' | 'completed' | 'error';
-  text?: string;
-  error?: string;
-  analysis?: {
-    summary: string;
-    key_points: string[];
-    action_items: string[];
+  transcript: string;
+  summary?: string;
+  actionItems?: string[];
+}
+
+interface PageProps {
+  params: {
+    id: string;
   };
 }
 
-export const metadata = {
+export const metadata: Metadata = {
   title: 'Meeting Details - WorkMate AI',
   description: 'View and manage your meeting details, transcriptions, and action items.',
 };
 
-export default function MeetingPage() {
-  const params = useParams();
+export default function MeetingPage({ params }: PageProps) {
   const meetingId = params.id as string;
   const [transcriptionData, setTranscriptionData] = useState<TranscriptionData | null>(null);
 
@@ -95,53 +95,35 @@ export default function MeetingPage() {
             <div className="lg:col-span-2">
               <Suspense fallback={<div>Loading transcription...</div>}>
                 <div className="container mx-auto px-4 py-8">
-                  <h1 className="text-2xl font-bold mb-6">Meeting Transcription</h1>
-                  
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <div>
-                      <MeetingTranscriber 
-                        meetingId={meetingId}
-                        tier="enterprise"
-                        onTranscriptionComplete={handleTranscriptionComplete}
-                      />
-                    </div>
-
-                    {transcriptionData && transcriptionData.status === 'completed' && (
-                      <div className="space-y-6">
-                        {transcriptionData.text && (
-                          <div className="bg-white p-6 rounded-lg shadow-sm">
-                            <h2 className="text-xl font-semibold mb-4">Transcript</h2>
-                            <p className="whitespace-pre-wrap text-gray-700">{transcriptionData.text}</p>
+                  <h1 className="text-2xl font-bold mb-8">Meeting Transcription</h1>
+                  <div className="grid grid-cols-1 gap-8">
+                    <MeetingTranscriber 
+                      meetingId={meetingId}
+                      onTranscriptionComplete={handleTranscriptionComplete}
+                    />
+                    
+                    {transcriptionData && (
+                      <>
+                        {transcriptionData.summary && (
+                          <div className="bg-white rounded-lg shadow-sm p-6">
+                            <h2 className="text-xl font-bold mb-4">Meeting Summary</h2>
+                            <p className="text-gray-600 whitespace-pre-wrap">
+                              {transcriptionData.summary}
+                            </p>
                           </div>
                         )}
-
-                        {transcriptionData.analysis && (
-                          <>
-                            <div className="bg-white p-6 rounded-lg shadow-sm">
-                              <h2 className="text-xl font-semibold mb-4">Summary</h2>
-                              <p className="text-gray-700">{transcriptionData.analysis.summary}</p>
-                            </div>
-
-                            <div className="bg-white p-6 rounded-lg shadow-sm">
-                              <h2 className="text-xl font-semibold mb-4">Key Points</h2>
-                              <ul className="list-disc list-inside space-y-2">
-                                {transcriptionData.analysis.key_points.map((point, index) => (
-                                  <li key={index} className="text-gray-700">{point}</li>
-                                ))}
-                              </ul>
-                            </div>
-
-                            <div className="bg-white p-6 rounded-lg shadow-sm">
-                              <h2 className="text-xl font-semibold mb-4">Action Items</h2>
-                              <ul className="list-disc list-inside space-y-2">
-                                {transcriptionData.analysis.action_items.map((item, index) => (
-                                  <li key={index} className="text-gray-700">{item}</li>
-                                ))}
-                              </ul>
-                            </div>
-                          </>
+                        
+                        {transcriptionData.actionItems && transcriptionData.actionItems.length > 0 && (
+                          <div className="bg-white rounded-lg shadow-sm p-6">
+                            <h2 className="text-xl font-bold mb-4">Action Items</h2>
+                            <ul className="list-disc list-inside space-y-2">
+                              {transcriptionData.actionItems.map((item, index) => (
+                                <li key={index} className="text-gray-600">{item}</li>
+                              ))}
+                            </ul>
+                          </div>
                         )}
-                      </div>
+                      </>
                     )}
                   </div>
                 </div>

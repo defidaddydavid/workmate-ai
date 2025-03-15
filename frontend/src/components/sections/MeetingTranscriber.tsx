@@ -1,253 +1,216 @@
 'use client';
 
-import React, { useState, useRef, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect } from 'react';
 import useWebSocket from 'react-use-websocket';
-import { format } from 'date-fns';
-import { v4 as uuidv4 } from 'uuid';
 
-interface TranscriptionResponse {
-  id: string;
-  status: 'processing' | 'completed' | 'error';
-  text?: string;
-  error?: string;
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+interface TranscriptionData {
+  transcript: string;
+  summary?: string;
+  actionItems?: string[];
 }
 
-interface Props {
+interface MeetingTranscriberProps {
   meetingId: string;
-  tier?: 'basic' | 'premium' | 'enterprise';
-  onTranscriptionComplete?: (transcription: TranscriptionResponse) => void;
+  onTranscriptionComplete?: (data: TranscriptionData) => void;
 }
 
-export const MeetingTranscriber: React.FC<Props> = ({
-  meetingId,
-  tier = 'basic',
-  onTranscriptionComplete
-}) => {
+export function MeetingTranscriber({ meetingId, onTranscriptionComplete }: MeetingTranscriberProps) {
   const [isRecording, setIsRecording] = useState(false);
-  const [transcriptionStatus, setTranscriptionStatus] = useState<string>('');
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [transcript, setTranscript] = useState<string>('');
+  const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string>('');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [liveTranscript, setLiveTranscript] = useState<string>('');
 
-  const mediaRecorder = useRef<MediaRecorder | null>(null);
-  const audioChunks = useRef<Blob[]>([]);
-  const router = useRouter();
+  // WebSocket connection for live transcription
+  const { sendMessage, lastMessage, readyState } = useWebSocket(
+    `${API_BASE_URL.replace('http', 'ws')}/api/v1/transcription/live/${meetingId}`,
+    {
+      shouldReconnect: () => false,
+      onOpen: () => console.log('WebSocket Connected'),
+      onError: (error) => {
+        console.error('WebSocket Error:', error);
+        setError('Failed to connect to live transcription service');
+      },
+    }
+  );
 
-  const wsUrl = tier === 'enterprise' 
-    ? `${process.env.NEXT_PUBLIC_API_URL?.replace('http', 'ws') || 'ws://localhost:8000'}/api/v1/transcription/live/${meetingId}?tier=enterprise`
-    : null;
-
-  const { sendMessage, lastMessage } = useWebSocket(wsUrl || null, {
-    shouldReconnect: () => tier === 'enterprise',
-    reconnectInterval: 3000,
-  });
-
-  React.useEffect(() => {
+  useEffect(() => {
     if (lastMessage) {
       try {
         const data = JSON.parse(lastMessage.data);
-        if (data.text) {
-          setLiveTranscript(prev => prev + ' ' + data.text);
+        if (data.transcript) {
+          setTranscript((prev) => prev + ' ' + data.transcript);
+          if (onTranscriptionComplete) {
+            onTranscriptionComplete({
+              transcript: data.transcript,
+              summary: data.summary,
+              actionItems: data.actionItems,
+            });
+          }
         }
-      } catch (e) {
-        console.error('Failed to parse WebSocket message:', e);
+      } catch (error) {
+        console.error('Error parsing WebSocket message:', error);
+        setError('Error receiving transcription data');
       }
     }
-  }, [lastMessage]);
+  }, [lastMessage, onTranscriptionComplete]);
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      setAudioFile(file);
+      setError('');
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!audioFile) {
+      setError('Please select an audio file to upload');
+      return;
+    }
+
+    setIsProcessing(true);
+    setError('');
+
+    const formData = new FormData();
+    formData.append('audioFile', audioFile);
+    formData.append('meetingId', meetingId);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/transcription/upload/${meetingId}`, {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to upload audio file');
+      }
+
+      const data = await response.json();
+      setTranscript(data.transcript);
+      
+      if (onTranscriptionComplete) {
+        onTranscriptionComplete({
+          transcript: data.transcript,
+          summary: data.summary,
+          actionItems: data.actionItems,
+        });
+      }
+    } catch (error) {
+      console.error('Error uploading audio:', error);
+      setError('Failed to upload and transcribe audio file');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorder.current = new MediaRecorder(stream);
-      
-      mediaRecorder.current.ondataavailable = (event) => {
+      const mediaRecorder = new MediaRecorder(stream);
+      const audioChunks: Blob[] = [];
+
+      mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          audioChunks.current.push(event.data);
-          if (tier === 'enterprise') {
-            sendMessage(event.data);
-          }
+          audioChunks.push(event.data);
         }
       };
 
-      mediaRecorder.current.onstop = async () => {
-        if (tier !== 'enterprise') {
-          const audioBlob = new Blob(audioChunks.current, { type: 'audio/webm' });
-          await uploadAudioFile(audioBlob);
-        }
-        audioChunks.current = [];
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        const file = new File([audioBlob], 'recording.webm', { type: 'audio/webm' });
+        setAudioFile(file);
+        await handleUpload();
       };
 
-      mediaRecorder.current.start(1000); // Collect data every second
+      mediaRecorder.start(1000);
       setIsRecording(true);
       setError('');
+
+      // Stop recording after 30 minutes
+      setTimeout(() => {
+        if (mediaRecorder.state === 'recording') {
+          mediaRecorder.stop();
+          stream.getTracks().forEach(track => track.stop());
+          setIsRecording(false);
+        }
+      }, 30 * 60 * 1000);
+
     } catch (err) {
-      setError('Failed to access microphone. Please check permissions.');
       console.error('Error accessing microphone:', err);
+      setError('Failed to access microphone. Please check permissions.');
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorder.current && isRecording) {
-      mediaRecorder.current.stop();
-      mediaRecorder.current.stream.getTracks().forEach(track => track.stop());
-      setIsRecording(false);
-    }
-  };
-
-  const uploadAudioFile = async (audioBlob: Blob) => {
-    const formData = new FormData();
-    const fileName = `recording-${format(new Date(), 'yyyy-MM-dd-HH-mm-ss')}.webm`;
-    formData.append('audioFile', audioBlob, fileName);
-    formData.append('meetingId', meetingId);
-    formData.append('tier', tier);
-
-    try {
-      const response = await fetch('/api/transcription', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Upload failed: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      setTranscriptionStatus('Processing transcription...');
-      pollTranscriptionStatus(data.id);
-    } catch (err) {
-      setError('Failed to upload audio file.');
-      console.error('Upload error:', err);
-    }
-  };
-
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      setSelectedFile(file);
-      setError('');
-    }
-  };
-
-  const handleFileUpload = async () => {
-    if (!selectedFile) return;
-
-    const formData = new FormData();
-    formData.append('audioFile', selectedFile);
-    formData.append('meetingId', meetingId);
-    formData.append('tier', tier);
-
-    try {
-      setUploadProgress(0);
-      const response = await fetch('/api/transcription', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Upload failed: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      setTranscriptionStatus('Processing transcription...');
-      pollTranscriptionStatus(data.id);
-    } catch (err) {
-      setError('Failed to upload audio file.');
-      console.error('Upload error:', err);
-    }
-  };
-
-  const pollTranscriptionStatus = async (transcriptionId: string) => {
-    try {
-      const response = await fetch(`/api/transcription?meetingId=${meetingId}&type=status`);
-      const data = await response.json();
-
-      if (data.status === 'completed') {
-        setTranscriptionStatus('Transcription completed');
-        onTranscriptionComplete?.(data);
-      } else if (data.status === 'error') {
-        setError(data.error || 'Transcription failed');
-      } else {
-        setTimeout(() => pollTranscriptionStatus(transcriptionId), 5000);
-      }
-    } catch (err) {
-      setError('Failed to check transcription status');
-      console.error('Status check error:', err);
-    }
+    setIsRecording(false);
+    // The actual stop logic is handled in the mediaRecorder.onstop event
   };
 
   return (
-    <div className="space-y-4 p-4 border rounded-lg bg-white shadow-sm">
-      <div className="flex flex-col space-y-2">
-        <h3 className="text-lg font-semibold">Meeting Transcription</h3>
-        {tier === 'enterprise' && (
-          <span className="text-sm text-blue-600">Enterprise Live Transcription Enabled</span>
-        )}
+    <div className="space-y-6 p-6 bg-white rounded-lg shadow-sm">
+      <div>
+        <h2 className="text-2xl font-bold mb-4">Meeting Transcriber</h2>
+        <p className="text-gray-600 mb-4">
+          Upload an audio file or start recording to transcribe your meeting.
+        </p>
       </div>
 
-      <div className="flex flex-col space-y-4">
-        {/* Recording Controls */}
-        <div className="flex space-x-2">
-          {!isRecording ? (
-            <button
-              onClick={startRecording}
-              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-            >
-              Start Recording
-            </button>
-          ) : (
-            <button
-              onClick={stopRecording}
-              className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
-            >
-              Stop Recording
-            </button>
-          )}
-        </div>
-
-        {/* File Upload */}
-        <div className="flex flex-col space-y-2">
+      <div className="space-y-4">
+        <div>
+          <label htmlFor="audio-file" className="block text-sm font-medium text-gray-700 mb-2">
+            Upload Audio File
+          </label>
           <input
+            id="audio-file"
             type="file"
             accept="audio/*"
-            onChange={handleFileSelect}
-            className="border p-2 rounded-md"
+            onChange={handleFileChange}
+            disabled={isProcessing || isRecording}
+            className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
           />
-          {selectedFile && (
-            <button
-              onClick={handleFileUpload}
-              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
-            >
-              Upload File
-            </button>
-          )}
-          {uploadProgress > 0 && (
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div
-                className="bg-blue-600 h-2 rounded-full"
-                style={{ width: `${uploadProgress}%` }}
-              />
-            </div>
-          )}
         </div>
 
-        {/* Status and Error Messages */}
-        {transcriptionStatus && (
-          <div className="text-sm text-gray-600">{transcriptionStatus}</div>
-        )}
-        {error && (
-          <div className="text-sm text-red-600">{error}</div>
-        )}
+        <div className="flex space-x-4">
+          <button
+            onClick={handleUpload}
+            disabled={!audioFile || isProcessing || isRecording}
+            className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isProcessing ? 'Processing...' : 'Upload & Transcribe'}
+          </button>
 
-        {/* Live Transcript Display */}
-        {tier === 'enterprise' && liveTranscript && (
-          <div className="mt-4 p-4 bg-gray-50 rounded-md">
-            <h4 className="text-sm font-semibold mb-2">Live Transcript</h4>
-            <p className="text-sm text-gray-700">{liveTranscript}</p>
+          <button
+            onClick={isRecording ? stopRecording : startRecording}
+            disabled={isProcessing}
+            className={`flex-1 px-4 py-2 rounded-md ${
+              isRecording
+                ? 'bg-red-600 text-white hover:bg-red-700'
+                : 'bg-green-600 text-white hover:bg-green-700'
+            } disabled:opacity-50 disabled:cursor-not-allowed`}
+          >
+            {isRecording ? 'Stop Recording' : 'Start Recording'}
+          </button>
+        </div>
+
+        {error && (
+          <div className="text-red-600 text-sm p-2 bg-red-50 rounded-md">
+            {error}
           </div>
         )}
       </div>
+
+      {transcript && (
+        <div className="mt-6">
+          <h3 className="text-xl font-semibold mb-2">Transcript</h3>
+          <div className="bg-gray-50 p-4 rounded-lg">
+            <p className="whitespace-pre-wrap">{transcript}</p>
+          </div>
+        </div>
+      )}
     </div>
   );
-};
+}

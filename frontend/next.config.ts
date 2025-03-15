@@ -1,34 +1,26 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  output: 'export',
   distDir: process.env.NODE_ENV === "production" ? "build" : ".next",
   images: {
+    unoptimized: true,
     domains: [
-      "source.unsplash.com",
-      "images.unsplash.com",
-      "web-assets.same.dev",
-    ],
-    remotePatterns: [
+      "avatars.githubusercontent.com",
+      "lh3.googleusercontent.com",
+      "vercel.com"
+    ]
+  },
+  env: {
+    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
+  },
+  async rewrites() {
+    return [
       {
-        protocol: "https",
-        hostname: "source.unsplash.com",
-        port: "",
-        pathname: "/**",
+        source: '/api/:path*',
+        destination: 'http://localhost:8000/api/:path*',
       },
-      {
-        protocol: "https",
-        hostname: "images.unsplash.com",
-        port: "",
-        pathname: "/**",
-      },
-      {
-        protocol: "https",
-        hostname: "web-assets.same.dev",
-        port: "",
-        pathname: "/**",
-      },
-    ],
+    ];
   },
 };
 
